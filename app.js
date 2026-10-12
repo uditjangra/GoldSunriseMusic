@@ -33,6 +33,9 @@ const I = {
   plus: svg('<path d="M12 5v14M5 12h14"/>', 1),
   back: svg('<path d="M19 12H5M12 19l-7-7 7-7"/>', 1),
   note: svg('<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>', 1),
+  vol: svg('<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4.2 4.2 0 0 1 0 6M18 6.5a7.8 7.8 0 0 1 0 11"/>', 1),
+  mute: svg('<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="m16 9.5 5 5M21 9.5l-5 5"/>', 1),
+  auto: svg('<path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/><path d="M10 9v6l5-3z"/>', 1),
   check: svg('<path d="m5 12.5 4.5 4.5L19 7.5"/>', 1),
 };
 
@@ -50,7 +53,10 @@ const state = {
   urls: new Map(),        // storage path -> { url, exp }
   queue: [],
   qi: -1,
+  ordered: [],            // the queue in its unshuffled order
   repeat: "off",          // off | all | one
+  shuffle: false,
+  autoplay: true,         // keep playing other songs when the queue runs out
   openLyrics: new Set(),
   channel: null,
 };
@@ -538,7 +544,12 @@ document.addEventListener("click", async (e) => {
         break;
       }
       case "play-ctx": playQueue(queueFor(ctx), 0); break;
-      case "shuffle": playQueue(shuffle(queueFor(ctx)), 0); break;
+      case "shuffle": {
+        const q = queueFor(ctx);
+        state.shuffle = true; savePrefs();
+        playQueue(q, Math.floor(Math.random() * q.length));
+        break;
+      }
       case "heart": await toggleHeart(id); break;
       case "lyrics":
         state.openLyrics.has(id) ? state.openLyrics.delete(id) : state.openLyrics.add(id);
@@ -598,6 +609,32 @@ const $player = document.getElementById("player");
 const $range = document.getElementById("p-range");
 const $play = document.getElementById("p-play");
 const $repeat = document.getElementById("p-repeat");
+const $shuffle = document.getElementById("p-shuffle");
+const $auto = document.getElementById("p-auto");
+const $volBtn = document.getElementById("p-volbtn");
+const $volPop = document.getElementById("p-volpop");
+const $vol = document.getElementById("p-vol");
+$shuffle.innerHTML = I.shuffle;
+$auto.innerHTML = I.auto;
+
+// Player preferences survive reloads (per device).
+try {
+  const p = JSON.parse(localStorage.getItem("songbook-player") || "{}");
+  if (["off", "all", "one"].includes(p.repeat)) state.repeat = p.repeat;
+  if (typeof p.shuffle === "boolean") state.shuffle = p.shuffle;
+  if (typeof p.autoplay === "boolean") state.autoplay = p.autoplay;
+  if (typeof p.volume === "number") audio.volume = Math.min(1, Math.max(0, p.volume));
+  audio.muted = !!p.muted;
+} catch {}
+function savePrefs() {
+  try {
+    localStorage.setItem("songbook-player", JSON.stringify({
+      repeat: state.repeat, shuffle: state.shuffle, autoplay: state.autoplay, volume: audio.volume, muted: audio.muted,
+    }));
+  } catch {}
+}
+// iPhones/iPads ignore audio.volume (hardware buttons only), so there the button just mutes.
+const canSetVolume = (() => { const a = new Audio(); a.volume = 0.5; return a.volume === 0.5; })();
 const $pheart = document.getElementById("p-heart");
 document.getElementById("p-prev").innerHTML = I.prev;
 document.getElementById("p-next").innerHTML = I.next;
@@ -607,9 +644,43 @@ let seeking = false;
 
 function playQueue(list, idx) {
   if (!list.length) return toast("No songs here yet");
-  state.queue = list;
-  state.qi = idx;
+  state.ordered = list;
+  if (state.shuffle) {
+    const cur = list[idx];
+    state.queue = [cur, ...shuffle(list.filter((t) => t !== cur))];
+    state.qi = 0;
+  } else {
+    state.queue = list;
+    state.qi = idx;
+  }
   loadCurrent(true);
+}
+
+function toggleShuffle() {
+  state.shuffle = !state.shuffle;
+  savePrefs();
+  const cur = state.queue[state.qi];
+  if (cur) {
+    if (state.shuffle) {
+      state.queue = [cur, ...shuffle(state.ordered.filter((t) => t.id !== cur.id))];
+      state.qi = 0;
+    } else {
+      state.queue = state.ordered;
+      state.qi = Math.max(0, state.ordered.findIndex((t) => t.id === cur.id));
+    }
+  }
+  updatePlayerUI();
+  toast(state.shuffle ? "Shuffle: on" : "Shuffle: off");
+}
+
+// Autoplay: when the queue ends, carry on with the songs that weren't in it.
+function extendQueue() {
+  const ids = new Set(state.queue.map((t) => t.id));
+  const rest = orderedAll().filter((t) => !ids.has(t.id));
+  if (!rest.length) return false;
+  state.ordered = [...state.ordered, ...rest];
+  state.queue = [...state.queue, ...(state.shuffle ? shuffle(rest) : rest)];
+  return true;
 }
 
 function loadCurrent(autoplay) {
@@ -634,6 +705,7 @@ function next(auto) {
   if (auto && state.repeat === "one") { audio.currentTime = 0; audio.play(); return; }
   if (state.qi < state.queue.length - 1) state.qi++;
   else if (state.repeat === "all" || !auto) state.qi = 0;
+  else if (state.autoplay && extendQueue()) state.qi++;
   else { audio.pause(); audio.currentTime = 0; return; }
   loadCurrent(true);
 }
@@ -647,6 +719,7 @@ function syncQueue() {
   if (!state.queue.length) return;
   const byId = new Map(state.tracks.map((t) => [t.id, t]));
   state.queue = state.queue.map((t) => byId.get(t.id) || t);
+  state.ordered = state.ordered.map((t) => byId.get(t.id) || t);
 }
 
 function updatePlayerUI() {
@@ -664,6 +737,25 @@ function updatePlayerUI() {
   $repeat.innerHTML = I.repeat + (state.repeat === "one" ? "<sup>1</sup>" : "");
   $repeat.className = "p-btn " + (state.repeat === "off" ? "off" : "on");
   $repeat.title = { off: "Repeat: off", all: "Repeat: all", one: "Repeat: this song" }[state.repeat];
+  $repeat.setAttribute("aria-label", $repeat.title);
+  $shuffle.className = "p-btn " + (state.shuffle ? "on" : "off");
+  $shuffle.title = state.shuffle ? "Shuffle: on" : "Shuffle: off";
+  $shuffle.setAttribute("aria-pressed", state.shuffle);
+  $auto.className = "p-btn " + (state.autoplay ? "on" : "off");
+  $auto.title = state.autoplay ? "Autoplay: on (keeps playing other songs)" : "Autoplay: off";
+  $auto.setAttribute("aria-pressed", state.autoplay);
+  updateVolumeUI();
+}
+
+function updateVolumeUI() {
+  const silent = audio.muted || audio.volume === 0;
+  $volBtn.innerHTML = silent ? I.mute : I.vol;
+  $volBtn.className = "p-btn " + (silent ? "off" : "on");
+  $volBtn.title = canSetVolume ? "Volume" : silent ? "Unmute" : "Mute";
+  const v = audio.muted ? 0 : Math.round(audio.volume * 100);
+  $vol.value = v;
+  $vol.style.setProperty("--p", v + "%");
+  document.getElementById("p-volnum").textContent = v;
 }
 
 function markPlaying() {
@@ -695,8 +787,31 @@ document.getElementById("p-prev").addEventListener("click", prev);
 document.getElementById("p-next").addEventListener("click", () => next(false));
 $repeat.addEventListener("click", () => {
   state.repeat = { off: "all", all: "one", one: "off" }[state.repeat];
+  savePrefs();
   updatePlayerUI();
   toast($repeat.title);
+});
+$shuffle.addEventListener("click", toggleShuffle);
+$auto.addEventListener("click", () => {
+  state.autoplay = !state.autoplay;
+  savePrefs();
+  updatePlayerUI();
+  toast(state.autoplay ? "Autoplay: on" : "Autoplay: off");
+});
+$volBtn.addEventListener("click", () => {
+  if (!canSetVolume) { audio.muted = !audio.muted; savePrefs(); return updateVolumeUI(); }
+  $volPop.hidden = !$volPop.hidden;
+  $volBtn.setAttribute("aria-expanded", !$volPop.hidden);
+});
+$vol.addEventListener("input", () => {
+  const v = Number($vol.value);
+  if (v > 0) audio.volume = v / 100;
+  audio.muted = v === 0;
+  savePrefs();
+  updateVolumeUI();
+});
+document.addEventListener("pointerdown", (e) => {
+  if (!$volPop.hidden && !e.target.closest(".p-vol")) { $volPop.hidden = true; $volBtn.setAttribute("aria-expanded", "false"); }
 });
 $pheart.addEventListener("click", () => {
   const t = state.queue[state.qi];

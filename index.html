@@ -22,7 +22,6 @@
       <div class="p-sub" id="p-sub"></div>
     </div>
     <div class="p-controls">
-      <button class="p-btn" id="p-repeat" title="Repeat"></button>
       <button class="p-btn" id="p-prev" title="Previous"></button>
       <button class="p-btn p-play" id="p-play" title="Play / pause"></button>
       <button class="p-btn" id="p-next" title="Next"></button>
@@ -32,6 +31,18 @@
       <span id="p-cur">0:00</span>
       <input type="range" id="p-range" min="0" max="1000" value="0" aria-label="Seek">
       <span id="p-dur">0:00</span>
+    </div>
+    <div class="p-modes">
+      <button class="p-btn" id="p-shuffle"></button>
+      <button class="p-btn" id="p-repeat"></button>
+      <button class="p-btn" id="p-auto"></button>
+      <div class="p-vol">
+        <button class="p-btn on" id="p-volbtn" aria-expanded="false"></button>
+        <div class="p-vol-pop" id="p-volpop" hidden>
+          <input type="range" id="p-vol" min="0" max="100" value="100" aria-label="Volume">
+          <span id="p-volnum">100</span>
+        </div>
+      </div>
     </div>
   </div>
 
