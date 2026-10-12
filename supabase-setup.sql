@@ -120,6 +120,18 @@ begin
   end loop;
 end $$;
 
+-- Jam (listening together) ---------------------------------
+-- A shared clock: both devices measure their offset to this so songs line up exactly.
+create or replace function public.jam_clock() returns double precision
+language sql volatile as $$ select (extract(epoch from clock_timestamp()) * 1000)::double precision $$;
+grant execute on function public.jam_clock() to authenticated;
+
+-- Jam messages travel on a private live channel only your two emails can use.
+drop policy if exists "songbook jam" on realtime.messages;
+create policy "songbook jam" on realtime.messages for all to authenticated
+  using (realtime.topic() = 'songbook-jam' and public.is_member())
+  with check (realtime.topic() = 'songbook-jam' and public.is_member());
+
 -- File storage (songs, covers, profile picture) — private bucket
 insert into storage.buckets (id, name, public)
 values ('music', 'music', false)

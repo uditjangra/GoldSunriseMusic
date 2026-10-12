@@ -291,10 +291,32 @@ input[type=file] { font: inherit; font-size: .88rem; }
 }
 #toast.show { transform: translate(-50%, 0); visibility: visible; transition: transform .25s; }
 
-/* player */
-.player {
+/* bottom dock: jam bar + player */
+.dock {
   position: fixed; z-index: 40; left: 50%; transform: translateX(-50%);
   bottom: max(12px, env(safe-area-inset-bottom)); width: min(1020px, calc(100% - 24px));
+  display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none;
+}
+.dock > * { pointer-events: auto; }
+body.has-jam { padding-bottom: calc(240px + env(safe-area-inset-bottom)); }
+
+/* jam */
+.jam {
+  display: flex; align-items: center; gap: 10px; max-width: 100%;
+  background: var(--ink); color: #fff; border-radius: 999px; padding: 6px 6px 6px 16px;
+  font-weight: 700; font-size: .9rem; box-shadow: 0 12px 28px -12px rgba(69, 48, 63, .6);
+}
+.jam[hidden] { display: none; }
+.jam-dot { width: 9px; height: 9px; flex: none; border-radius: 50%; background: #7be0a6; animation: jam-pulse 1.6s infinite; }
+@keyframes jam-pulse { 0% { box-shadow: 0 0 0 0 rgba(123, 224, 166, .7); } 70%, 100% { box-shadow: 0 0 0 8px rgba(123, 224, 166, 0); } }
+.jam-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jam .btn { flex: none; padding: 6px 13px; font-size: .84rem; box-shadow: none; }
+.jam .btn:not(.primary) { background: rgba(255, 255, 255, .14); border-color: transparent; color: #fff; }
+.jam-hero { display: contents; }
+
+/* player */
+.player {
+  width: 100%;
   background: rgba(255, 255, 255, .88); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
   border-radius: 26px; padding: 10px 16px 10px 10px; box-shadow: 0 18px 40px -16px rgba(140, 60, 100, .5);
   border: 2px solid #fff;
@@ -384,4 +406,5 @@ footer.foot button { background: none; border: 0; text-decoration: underline; cu
   .p-art { width: 48px; height: 48px; }
   .p-modes { justify-content: space-around; border-top: 2px solid var(--pink-soft); padding-top: 4px; }
   .p-seek { padding: 0 6px; }
+  .jam { font-size: .84rem; padding-left: 12px; gap: 8px; }
 }

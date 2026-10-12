@@ -57,6 +57,13 @@ Any static host works: Vercel, Netlify, GitHub Pages. Easiest by hand: **app.net
 
 > Already set up before song requests existed? Run `supabase-setup.sql` again in the SQL Editor (keep your two emails in it). It's safe to re-run and adds the new `requests` table.
 
+**Jam (listen together)**: tap **Start a jam** on the home page (or the 🎧 button in the player). The other person sees "… started a jam" with a **Join** button. While you're both in, anything either of you does (play, pause, seek, skip, start an album, shuffle/repeat) happens on both screens, and the songs stay in step to within a few hundredths of a second. Volume stays separate. Tap **Leave** to go back to listening on your own.
+
+> Already set up before Jam existed? Run `supabase-setup.sql` again in the SQL Editor (keep your two emails in it). It adds the shared clock and the private jam channel. Until then, Jam says it needs this update.
+
+- Bluetooth headphones add their own delay (often 0.1–0.3 s) that a website can't see, so for the tightest sync use wired headphones or the phone speaker.
+- If a phone blocks audio from starting by itself, the jam bar shows **Tap to listen**. One tap fixes it.
+
 ## Good to know
 
 - **Free plan limits:** 1 GB of files in total, max 50 MB per song. An MP3 is usually 3–10 MB, so that's roughly 100–300 songs.

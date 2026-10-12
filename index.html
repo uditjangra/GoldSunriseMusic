@@ -15,6 +15,8 @@
   <div class="sparkles" aria-hidden="true"></div>
   <main id="app"><div class="loading">tuning the strings…</div></main>
 
+  <div class="dock">
+  <div id="jam" class="jam" hidden></div>
   <div id="player" class="player" hidden>
     <button class="p-art" id="p-art" title="Open album"></button>
     <div class="p-info">
@@ -36,6 +38,7 @@
       <button class="p-btn" id="p-shuffle"></button>
       <button class="p-btn" id="p-repeat"></button>
       <button class="p-btn" id="p-auto"></button>
+      <button class="p-btn" id="p-jam"></button>
       <div class="p-vol">
         <button class="p-btn on" id="p-volbtn" aria-expanded="false"></button>
         <div class="p-vol-pop" id="p-volpop" hidden>
@@ -44,6 +47,7 @@
         </div>
       </div>
     </div>
+  </div>
   </div>
 
   <div id="modal-root"></div>

@@ -37,6 +37,7 @@ const I = {
   mute: svg('<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="m16 9.5 5 5M21 9.5l-5 5"/>', 1),
   auto: svg('<path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/><path d="M10 9v6l5-3z"/>', 1),
   check: svg('<path d="m5 12.5 4.5 4.5L19 7.5"/>', 1),
+  jam: svg('<path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/>', 1),
 };
 
 const state = {
@@ -59,6 +60,19 @@ const state = {
   autoplay: true,         // keep playing other songs when the queue runs out
   openLyrics: new Set(),
   channel: null,
+};
+
+// Listening together (see the "jam" section near the bottom).
+const jam = {
+  cid: crypto.randomUUID(), // this device
+  ch: null, ready: false,
+  on: false,                // this device is in the jam
+  s: null,                  // the shared state everyone follows
+  peers: [],                // other devices online: { role, jam }
+  offset: 0, samples: [],   // server clock = Date.now() + offset
+  bias: { play: 0, seek: 0 }, lastSeek: 0, seekKind: "", checkBias: false,
+  starting: false, quietAt: 0, lastTick: 0, endedV: -1, blocked: false,
+  timers: [], startTimer: null, joinTimer: null, denied: false,
 };
 
 let sb = null;
@@ -135,6 +149,7 @@ async function boot() {
     if (!state.isSinger && !state.session.user.user_metadata?.onboarded) state.welcome = { step: 0, preview: false };
     await loadAll();
     subscribe();
+    jamConnect();
     if (!state.booted) {
       state.booted = true;
       window.addEventListener("hashchange", () => route());
@@ -153,6 +168,8 @@ async function boot() {
 
 function teardown() {
   if (state.channel) { sb.removeChannel(state.channel); state.channel = null; }
+  jamLeave(true);
+  if (jam.ch) { sb.removeChannel(jam.ch); jam.ch = null; jam.ready = false; jam.peers = []; renderJam(); }
   audio.pause();
   audio.removeAttribute("src");
   state.queue = []; state.qi = -1;
@@ -262,6 +279,7 @@ function route(soft = false) {
   if (rel) renderRelease(rel); else renderHome();
   if (!soft) window.scrollTo(0, 0);
   markPlaying();
+  renderJam();
 }
 
 /* First-login quiz for her. Shown once; remembered on her account. */
@@ -333,6 +351,7 @@ function renderHome() {
         ${p.bio ? `<p class="bio">${esc(p.bio)}</p>` : ""}
         <div class="hero-actions">
           ${state.tracks.length ? `<button class="btn primary" data-act="shuffle" data-ctx="all">${I.shuffle} Shuffle everything</button>` : ""}
+          <span class="jam-hero" id="jam-hero"></span>
           ${S ? `<button class="btn" data-act="edit-profile">${I.edit} Edit profile</button>` : ""}
         </div>
       </div>
@@ -566,6 +585,10 @@ document.addEventListener("click", async (e) => {
       case "req-toggle": await toggleRequest(id); break;
       case "req-edit": editRequest(state.requests.find((r) => r.id === id)); break;
       case "move": await moveTrack(id, Number(el.dataset.dir)); break;
+      case "jam-start": await jamStart(); break;
+      case "jam-join": await jamJoin(); break;
+      case "jam-leave": jamLeave(); break;
+      case "jam-unblock": jam.blocked = false; renderJam(); jamTick(); break;
       case "signout": state.welcome = null; await sb.auth.signOut(); location.hash = ""; break;
       case "reload": location.reload(); break;
     }
@@ -653,6 +676,7 @@ function playQueue(list, idx) {
     state.queue = list;
     state.qi = idx;
   }
+  if (jam.s) return jamCommit({ track: true, playing: true });
   loadCurrent(true);
 }
 
@@ -668,6 +692,7 @@ function toggleShuffle() {
       state.queue = state.ordered;
       state.qi = Math.max(0, state.ordered.findIndex((t) => t.id === cur.id));
     }
+    if (jam.s) jamCommit();
   }
   updatePlayerUI();
   toast(state.shuffle ? "Shuffle: on" : "Shuffle: off");
@@ -689,6 +714,7 @@ function loadCurrent(autoplay) {
   const url = urlFor(t.audio_path);
   const go = (u) => {
     audio.src = u;
+    audio.dataset.track = t.id;
     if (autoplay) audio.play().catch(() => {});
     updatePlayerUI(); setMediaSession(); markPlaying();
   };
@@ -697,6 +723,7 @@ function loadCurrent(autoplay) {
 }
 
 function togglePlay() {
+  if (jam.s) return void (state.queue[state.qi] && jamCommit({ playing: !jam.s.playing }));
   if (!audio.src) return;
   audio.paused ? audio.play().catch(() => {}) : audio.pause();
 }
@@ -707,15 +734,22 @@ function next(auto) {
   else if (state.repeat === "all" || !auto) state.qi = 0;
   else if (state.autoplay && extendQueue()) state.qi++;
   else { audio.pause(); audio.currentTime = 0; return; }
+  if (jam.s) return jamCommit({ track: true, playing: true });
   loadCurrent(true);
 }
 function prev() {
-  if (audio.currentTime > 3 || state.qi <= 0) { audio.currentTime = 0; return; }
+  if ((jam.s ? jamPos() : audio.currentTime) > 3 || state.qi <= 0) return seekTo(0);
   state.qi--;
+  if (jam.s) return jamCommit({ track: true, playing: true });
   loadCurrent(true);
+}
+function seekTo(sec) {
+  if (jam.s) return jamCommit({ pos: Math.max(0, sec) });
+  audio.currentTime = sec;
 }
 
 function syncQueue() {
+  if (jam.s) return applyJam();
   if (!state.queue.length) return;
   const byId = new Map(state.tracks.map((t) => [t.id, t]));
   state.queue = state.queue.map((t) => byId.get(t.id) || t);
@@ -744,6 +778,7 @@ function updatePlayerUI() {
   $auto.className = "p-btn " + (state.autoplay ? "on" : "off");
   $auto.title = state.autoplay ? "Autoplay: on (keeps playing other songs)" : "Autoplay: off";
   $auto.setAttribute("aria-pressed", state.autoplay);
+  updateJamButton();
   updateVolumeUI();
 }
 
@@ -775,11 +810,11 @@ function setMediaSession() {
 }
 if ("mediaSession" in navigator) {
   const ms = navigator.mediaSession;
-  ms.setActionHandler("play", () => audio.play());
-  ms.setActionHandler("pause", () => audio.pause());
+  ms.setActionHandler("play", () => (jam.s ? jamCommit({ playing: true }) : audio.play()));
+  ms.setActionHandler("pause", () => (jam.s ? jamCommit({ playing: false }) : audio.pause()));
   ms.setActionHandler("previoustrack", prev);
   ms.setActionHandler("nexttrack", () => next(false));
-  try { ms.setActionHandler("seekto", (d) => { audio.currentTime = d.seekTime; }); } catch {}
+  try { ms.setActionHandler("seekto", (d) => seekTo(d.seekTime)); } catch {}
 }
 
 $play.addEventListener("click", togglePlay);
@@ -788,6 +823,7 @@ document.getElementById("p-next").addEventListener("click", () => next(false));
 $repeat.addEventListener("click", () => {
   state.repeat = { off: "all", all: "one", one: "off" }[state.repeat];
   savePrefs();
+  if (jam.s) jamCommit();
   updatePlayerUI();
   toast($repeat.title);
 });
@@ -795,6 +831,7 @@ $shuffle.addEventListener("click", toggleShuffle);
 $auto.addEventListener("click", () => {
   state.autoplay = !state.autoplay;
   savePrefs();
+  if (jam.s) jamCommit();
   updatePlayerUI();
   toast(state.autoplay ? "Autoplay: on" : "Autoplay: off");
 });
@@ -823,8 +860,15 @@ document.getElementById("p-art").addEventListener("click", () => {
 });
 
 audio.addEventListener("play", () => { document.body.classList.remove("is-paused"); $play.innerHTML = I.pause; });
-audio.addEventListener("pause", () => { document.body.classList.add("is-paused"); $play.innerHTML = I.play; });
-audio.addEventListener("ended", () => next(true));
+audio.addEventListener("pause", () => {
+  document.body.classList.add("is-paused"); $play.innerHTML = I.play;
+  // Paused from outside the app (headphones unplugged, a phone call…): pause the jam for everyone.
+  if (Date.now() - jam.quietAt < 1000) return; // our own pause
+  const t = state.queue[state.qi];
+  if (jam.s?.playing && t && audio.dataset.track === t.id && !audio.ended && audio.duration - audio.currentTime > 0.5) jamCommit({ playing: false });
+});
+audio.addEventListener("ended", () => (jam.on ? jamEnded() : next(true)));
+audio.addEventListener("canplay", () => jam.s && jamTick());
 audio.addEventListener("loadedmetadata", () => { document.getElementById("p-dur").textContent = fmtTime(audio.duration); });
 audio.addEventListener("timeupdate", () => {
   if (seeking || !audio.duration) return;
@@ -840,6 +884,7 @@ audio.addEventListener("error", async () => {
   audio.dataset.retried = t.id;
   state.urls.delete(t.audio_path);
   await signPaths([t.audio_path]);
+  if (jam.s) { quietPause(); if (urlFor(t.audio_path)) audio.src = urlFor(t.audio_path); return jamTick(); }
   const pos = audio.currentTime;
   if (urlFor(t.audio_path)) { audio.src = urlFor(t.audio_path); audio.currentTime = pos; audio.play().catch(() => {}); }
 });
@@ -850,7 +895,7 @@ $range.addEventListener("input", () => {
   document.getElementById("p-cur").textContent = fmtTime(p * (audio.duration || 0));
 });
 $range.addEventListener("change", () => {
-  if (audio.duration) audio.currentTime = ($range.value / 1000) * audio.duration;
+  if (audio.duration) seekTo(($range.value / 1000) * audio.duration);
   seeking = false;
 });
 document.addEventListener("keydown", (e) => {
@@ -858,6 +903,348 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault(); togglePlay();
   }
 });
+
+/* ---------------------------------------------------------------- jam */
+// Listening together. Everyone in the jam follows one shared timeline:
+// "track queue[qi] is at `pos` seconds at server time `at`" (plus the queue and
+// modes). Whoever changes anything publishes a new version; every device —
+// including the one that made the change — steers its audio onto that line.
+// Each device measures its offset to the database server's clock, so phones
+// with different clocks still agree to the millisecond.
+
+const JAM_TOPIC = "songbook-jam";
+const JAM_SETUP = "Jam needs a quick database update: run supabase-setup.sql again (see README).";
+const JAM_TICK = 250;      // ms between sync checks
+const JAM_HARD = 0.15;     // s off the timeline before jumping instead of easing
+const JAM_DEAD = 0.008;    // s close enough to leave alone
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+// A tiny silent clip: playing it from a tap unlocks audio on phones before the jam's song arrives.
+const SILENT = (() => {
+  const n = 800, b = new Uint8Array(44 + n), v = new DataView(b.buffer);
+  const str = (o, x) => [...x].forEach((c, i) => (b[o + i] = c.charCodeAt(0)));
+  str(0, "RIFF"); v.setUint32(4, 36 + n, true); str(8, "WAVEfmt "); v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, 8000, true); v.setUint32(28, 8000, true);
+  v.setUint16(32, 1, true); v.setUint16(34, 8, true); str(36, "data"); v.setUint32(40, n, true); b.fill(128, 44);
+  return URL.createObjectURL(new Blob([b], { type: "audio/wav" }));
+})();
+
+const $pjam = document.getElementById("p-jam");
+$pjam.innerHTML = I.jam;
+$pjam.addEventListener("click", () => {
+  const go = jam.on ? (jamLeave(), null) : jam.peers.some((p) => p.jam) ? jamJoin() : jamStart();
+  go?.catch((e) => toast(e.message || String(e), 5000));
+});
+
+/* clock */
+const clockNow = () => Date.now() + jam.offset;
+
+async function syncClock(n) {
+  for (let i = 0; i < n; i++) {
+    const t0 = Date.now();
+    const { data, error } = await sb.rpc("jam_clock");
+    const t1 = Date.now();
+    if (error) throw error.code === "PGRST202" || /jam_clock/.test(error.message) ? new Error(JAM_SETUP) : error;
+    jam.samples.push({ rtt: t1 - t0, off: data - (t0 + t1) / 2 });
+  }
+  // The quickest round trip is the one where the server's reading sits closest to the middle.
+  jam.samples = jam.samples.slice(-24);
+  jam.offset = jam.samples.reduce((a, b) => (b.rtt < a.rtt ? b : a)).off;
+}
+
+/* channel */
+function jamConnect() {
+  if (jam.ch) return;
+  const ch = sb.channel(JAM_TOPIC, { config: { private: true, presence: { key: jam.cid } } });
+  ch.on("broadcast", { event: "jam" }, ({ payload }) => jamReceive(payload));
+  ch.on("presence", { event: "sync" }, () => {
+    jam.peers = Object.entries(ch.presenceState()).filter(([k]) => k !== jam.cid).map(([, m]) => m[0]).filter(Boolean);
+    renderJam();
+  });
+  ch.subscribe((status) => {
+    jam.ready = status === "SUBSCRIBED";
+    if (status === "CHANNEL_ERROR") jam.denied = true;
+    if (!jam.ready) return;
+    jam.denied = false;
+    jamPresence();
+    if (jam.on) jamSend({ type: "hello" }); // reconnected: catch up on anything missed
+  });
+  jam.ch = ch;
+}
+
+function jamPresence() {
+  if (jam.ready) jam.ch.track({ role: state.isSinger ? "singer" : "listener", jam: jam.on });
+}
+
+function jamSend(msg) {
+  jam.ch?.send({ type: "broadcast", event: "jam", payload: { ...msg, from: jam.cid } });
+}
+
+// Newer version wins; same version (two changes at once) is settled by device id.
+const jamCmp = (a, b) => a.v - b.v || (a.by > b.by) - (a.by < b.by);
+
+function jamReceive(m) {
+  if (!jam.on) return;
+  if (m.type === "state") return jamAdopt(m.s);
+  if (!jam.s) { if (m.type === "beat") jamSend({ type: "hello" }); return; }
+  if (m.type === "hello") jamSend({ type: "state", s: jam.s });
+  else if (m.type === "beat") {
+    const c = jamCmp(m, jam.s);
+    if (c > 0) jamSend({ type: "hello" });
+    else if (c < 0) jamSend({ type: "state", s: jam.s });
+  }
+}
+
+function jamAdopt(ns) {
+  if (jam.s && jamCmp(ns, jam.s) <= 0) return;
+  const first = !jam.s;
+  jam.s = ns;
+  applyJam();
+  renderJam();
+  if (first) toast(`You're in the jam with ${jamOther()} ♡`);
+}
+
+/* joining and leaving */
+async function jamBegin() {
+  if (!jam.ready) throw new Error(jam.denied ? JAM_SETUP : "Still connecting, try again in a moment");
+  jam.on = true;
+  renderJam();
+  try { await syncClock(8); } catch (e) { jamLeave(true); throw e; }
+  audio.preload = "auto";
+  jam.timers = [
+    setInterval(jamTick, JAM_TICK),
+    setInterval(() => jam.s && jamSend({ type: "beat", v: jam.s.v, by: jam.s.by }), 5000),
+    setInterval(() => syncClock(3).catch(() => {}), 15000),
+  ];
+  jamPresence();
+}
+
+function unlockAudio(force) {
+  if (!audio.paused || (audio.getAttribute("src") && !force)) return;
+  audio.src = SILENT;
+  audio.dataset.track = "";
+  audio.play().catch(() => {});
+}
+
+async function jamStart() {
+  if (jam.peers.some((p) => p.jam)) return jamJoin();
+  const paused = audio.paused;
+  const pausedAt = audio.currentTime || 0;
+  unlockAudio();
+  await jamBegin();
+  const playing = !paused && !!state.queue[state.qi];
+  // Measured after the clock sync so a song that's already playing carries on seamlessly.
+  jam.s = { ...jamSnapshot(), playing, pos: playing ? audio.currentTime : pausedAt, at: clockNow(), v: 1, by: jam.cid };
+  applyJam();
+  jamSend({ type: "state", s: jam.s });
+  renderJam();
+  toast(`Jam started ♡ ${jamOther()} can join from their screen`, 4000);
+}
+
+async function jamJoin() {
+  unlockAudio(true); // the jam's song replaces whatever was paused here anyway
+  jam.s = null;
+  await jamBegin();
+  jamSend({ type: "hello" });
+  clearTimeout(jam.joinTimer);
+  jam.joinTimer = setTimeout(() => {
+    if (jam.on && !jam.s) { jamLeave(true); toast("Couldn't reach the jam, try again"); }
+  }, 6000);
+}
+
+function jamLeave(quiet) {
+  if (!jam.on) return;
+  jam.on = false;
+  jam.s = null;
+  jam.timers.forEach(clearInterval);
+  clearTimeout(jam.startTimer);
+  clearTimeout(jam.joinTimer);
+  audio.playbackRate = 1;
+  audio.preload = "metadata";
+  jam.blocked = false;
+  jamPresence();
+  renderJam();
+  updatePlayerUI();
+  if (!quiet) toast("You left the jam");
+}
+
+/* the shared state */
+const jamSnapshot = () => ({
+  queue: state.queue.map((t) => t.id), ordered: state.ordered.map((t) => t.id), qi: state.qi,
+  shuffle: state.shuffle, repeat: state.repeat, autoplay: state.autoplay,
+});
+
+// Where the song should be right now on the shared timeline.
+function jamPos(s = jam.s, now = clockNow()) {
+  if (!s) return 0;
+  return s.playing && now > s.at ? s.pos + (now - s.at) / 1000 : s.pos;
+}
+
+// Publish a change. Song changes, seeks and resumes start a beat in the
+// future so every device has time to buffer and starts at the same instant.
+function jamCommit(o = {}) {
+  const s = jam.s, now = clockNow();
+  const playing = o.playing ?? s.playing;
+  let pos = s.pos, at = s.at;
+  if (o.at != null) { pos = o.pos ?? 0; at = o.at; }
+  else if (o.track || o.pos != null || playing !== s.playing) {
+    pos = o.pos ?? (o.track ? 0 : jamPos(s, now));
+    at = now + (!playing ? 0 : o.track ? 900 : 400);
+  }
+  jam.s = { ...jamSnapshot(), playing, pos, at, v: s.v + 1, by: jam.cid };
+  applyJam();
+  jamSend({ type: "state", s: jam.s });
+}
+
+function applyJam() {
+  const s = jam.s;
+  const byId = new Map(state.tracks.map((t) => [t.id, t]));
+  const curId = s.queue[s.qi];
+  state.queue = s.queue.map((id) => byId.get(id)).filter(Boolean);
+  state.ordered = s.ordered.map((id) => byId.get(id)).filter(Boolean);
+  state.qi = state.queue.findIndex((t) => t.id === curId);
+  state.shuffle = s.shuffle; state.repeat = s.repeat; state.autoplay = s.autoplay;
+  const t = state.queue[state.qi];
+  if (!t) { quietPause(); return updatePlayerUI(); }
+  if (audio.dataset.track !== t.id) jamLoad(t);
+  updatePlayerUI(); setMediaSession(); markPlaying();
+  jamTick();
+}
+
+function jamLoad(t) {
+  quietPause();
+  audio.dataset.track = t.id;
+  jam.checkBias = false;
+  const set = () => { if (audio.dataset.track === t.id && urlFor(t.audio_path)) { audio.src = urlFor(t.audio_path); jamTick(); } };
+  if (urlFor(t.audio_path)) set();
+  else signPaths([t.audio_path]).then(set);
+}
+
+// Pause on the jam's behalf. (A counter of our own pauses would drift: changing the
+// song cancels the queued "pause" event, so we remember when instead.)
+function quietPause() {
+  if (!audio.paused) { jam.quietAt = Date.now(); audio.pause(); }
+}
+
+// Song ran out: everyone computes the same next step from the same end time.
+function jamEnded() {
+  const s = jam.s, t = state.queue[state.qi];
+  if (!s || !s.playing || !t || audio.dataset.track !== t.id || jam.endedV === s.v) return;
+  jam.endedV = s.v;
+  const dur = isFinite(audio.duration) ? audio.duration : t.duration || 0;
+  const endAt = s.at + (dur - s.pos) * 1000;
+  if (state.repeat === "one") return jamCommit({ pos: 0, playing: true, at: Math.max(endAt + 300, clockNow() + 300) });
+  if (state.qi < state.queue.length - 1) state.qi++;
+  else if (state.repeat === "all") state.qi = 0;
+  else if (state.autoplay && extendQueue()) state.qi++;
+  else return jamCommit({ playing: false, pos: 0 });
+  jamCommit({ track: true, pos: 0, playing: true, at: Math.max(endAt + 800, clockNow() + 400) });
+}
+
+// Keep this device on the timeline: ease small drift with playback speed
+// (inaudible), jump for big drift, and learn how long jumps take to land.
+function jamTick() {
+  clearTimeout(jam.startTimer);
+  const s = jam.s;
+  if (!jam.on || !s) return;
+  const t = state.queue[state.qi];
+  if (!t || audio.dataset.track !== t.id || !audio.getAttribute("src") || audio.seeking) return;
+  const now = clockNow();
+  const gap = now - jam.lastTick;
+  jam.lastTick = now;
+
+  if (!s.playing || now < s.at) {
+    quietPause();
+    audio.playbackRate = 1;
+    if (Math.abs(audio.currentTime - s.pos) > 0.03) audio.currentTime = s.pos;
+    if (s.playing) jam.startTimer = setTimeout(jamTick, s.at - now);
+    return;
+  }
+
+  const target = s.pos + (now - s.at) / 1000;
+  const dur = isFinite(audio.duration) ? audio.duration : t.duration;
+  if (dur && target >= dur - 0.02) return jamEnded();
+
+  if (audio.paused) {
+    if (jam.starting || jam.blocked) return;
+    jamJump(target, "play");
+    jam.starting = true;
+    audio.play()
+      .catch((e) => { if (e.name === "NotAllowedError") { jam.blocked = true; renderJam(); } })
+      .finally(() => (jam.starting = false));
+    return;
+  }
+  if (audio.readyState < 3) return; // still buffering
+
+  const diff = audio.currentTime - target; // + ahead, - behind
+  if (jam.checkBias) {
+    if (now - jam.lastSeek < 800) return;
+    // Learn from sensible landings only; a failed or stalled jump says nothing about seek time.
+    const k = jam.seekKind;
+    if (Math.abs(diff) < 0.4) jam.bias[k] = clamp(jam.bias[k] - clamp(diff, -0.1, 0.1) * 0.7, 0, 0.3);
+    jam.checkBias = false;
+  }
+  if (Math.abs(diff) > JAM_HARD && now - jam.lastSeek > 1500) {
+    audio.playbackRate = 1;
+    return jamJump(target, "seek");
+  }
+  // Only steer by speed while ticks are frequent; a throttled background tab could overshoot.
+  const rate = Math.abs(diff) < JAM_DEAD || gap > 3 * JAM_TICK ? 1 : clamp(Math.round((1 - diff * 0.8) * 200) / 200, 0.94, 1.06);
+  if (audio.playbackRate !== rate) audio.playbackRate = rate;
+}
+
+function jamJump(target, kind) {
+  audio.currentTime = target + jam.bias[kind];
+  jam.lastSeek = clockNow();
+  jam.seekKind = kind;
+  jam.checkBias = true;
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible" || !jam.on) return;
+  jam.samples = [];
+  syncClock(3).then(jamTick, () => {});
+  jamSend({ type: "hello" });
+});
+
+/* jam UI */
+function jamOther() {
+  const p = jam.peers.find((x) => x.jam) || jam.peers[0];
+  const mine = state.isSinger ? "singer" : "listener";
+  if (p && p.role === mine) return "your other device";
+  return state.isSinger ? listenerName() || "your listener" : state.profile.name || "the singer";
+}
+
+function renderJam() {
+  const $bar = document.getElementById("jam");
+  const live = jam.peers.some((p) => p.jam);
+  const other = esc(jamOther());
+  let html = "";
+  if (jam.on) {
+    html = `<span class="jam-dot"></span>
+      <span class="jam-text"><b>Jam</b> · ${!jam.s ? "joining…" : live ? `listening with ${other}` : `waiting for ${other} to join…`}</span>
+      ${jam.blocked ? `<button class="btn primary" data-act="jam-unblock">${I.play} Tap to listen</button>` : ""}
+      <button class="btn" data-act="jam-leave">Leave</button>`;
+  } else if (live) {
+    html = `<span class="jam-dot"></span><span class="jam-text"><b>${other}</b> started a jam</span>
+      <button class="btn primary" data-act="jam-join">${I.jam} Join</button>`;
+  }
+  $bar.innerHTML = html;
+  $bar.hidden = !html;
+  document.body.classList.toggle("has-jam", !!html);
+  const $hero = document.getElementById("jam-hero");
+  if ($hero) $hero.innerHTML = jam.on || !state.tracks.length ? ""
+    : `<button class="btn" data-act="${live ? "jam-join" : "jam-start"}">${I.jam} ${live ? "Join the jam" : "Start a jam"}</button>`;
+  updateJamButton();
+}
+
+function updateJamButton() {
+  const live = jam.peers.some((p) => p.jam);
+  $pjam.className = "p-btn " + (jam.on ? "on" : "off");
+  $pjam.title = jam.on ? "Leave the jam" : live ? "Join the jam" : "Start a jam (listen together)";
+  $pjam.setAttribute("aria-label", $pjam.title);
+  $pjam.setAttribute("aria-pressed", jam.on);
+}
 
 /* ---------------------------------------------------------------- modals */
 
