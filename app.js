@@ -1133,8 +1133,16 @@ async function moveTrack(id, dir) {
 
 const extOf = (name, fallback) => (/\.([a-z0-9]{1,5})$/i.exec(name)?.[1] || fallback).toLowerCase();
 
+// Safari (iPhone/iPad) refuses to play audio stored without a proper audio type,
+// and Windows browsers often leave the type blank, so name it from the extension.
+const AUDIO_TYPES = { mp3: "audio/mpeg", m4a: "audio/mp4", aac: "audio/aac", wav: "audio/wav", ogg: "audio/ogg", oga: "audio/ogg", opus: "audio/ogg", flac: "audio/flac", webm: "audio/webm" };
+
 async function uploadFile(blob, folder, ext) {
-  const path = `${folder}/${crypto.randomUUID()}.${ext || extOf(blob.name || "", "bin")}`;
+  ext = ext || extOf(blob.name || "", "bin");
+  const path = `${folder}/${crypto.randomUUID()}.${ext}`;
+  if (folder === "audio" && AUDIO_TYPES[ext] && blob.type !== AUDIO_TYPES[ext]) {
+    blob = new File([blob], blob.name || `song.${ext}`, { type: AUDIO_TYPES[ext] });
+  }
   const { error } = await sb.storage.from(BUCKET).upload(path, blob, {
     contentType: blob.type || undefined, cacheControl: "31536000", upsert: false,
   });
