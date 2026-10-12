@@ -204,6 +204,25 @@ button.req-box:hover { border-color: var(--pink); }
 .login-card h1 { font-size: 2rem; }
 .login-card p { color: var(--ink-soft); margin: 6px 0 22px; }
 .login-card form { display: grid; gap: 12px; text-align: left; }
+/* first-login quiz */
+.welcome .btn { justify-content: center; }
+.quiz { display: grid; gap: 10px; }
+.quiz-opt {
+  border: 2px solid var(--line); background: #fffdfc; border-radius: 16px; padding: 13px 16px;
+  font-weight: 800; cursor: pointer; box-shadow: 0 3px 0 var(--line); transition: transform .15s, background .15s;
+}
+.quiz-opt:hover { background: var(--pink-soft); border-color: var(--pink); transform: translateY(-1px); }
+.quiz-opt.shake { animation: shake .4s; background: var(--pink-soft); border-color: var(--pink); color: var(--pink-deep); }
+@keyframes shake { 20%, 60% { transform: translateX(-7px) rotate(-2deg); } 40%, 80% { transform: translateX(7px) rotate(2deg); } }
+.quiz-hint { min-height: 1.3em; font-weight: 800; color: var(--pink-deep) !important; margin: 14px 0 0 !important; font-size: .92rem; }
+.dots { display: flex; justify-content: center; gap: 6px; margin-top: 22px; }
+.dots i { width: 8px; height: 8px; border-radius: 50%; background: var(--line); transition: width .2s; }
+.dots i.on { width: 22px; border-radius: 999px; background: var(--pink); }
+.hearts-burst { position: fixed; inset: 0; pointer-events: none; z-index: 70; overflow: hidden; }
+.hearts-burst i { position: absolute; bottom: -40px; font-style: normal; animation: float-up 2.6s ease-in forwards; }
+@keyframes float-up { to { transform: translateY(-110vh) rotate(25deg); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .hearts-burst { display: none; } .quiz-opt.shake { animation: none; } }
+
 .err { color: #c2416e; font-weight: 700; font-size: .9rem; min-height: 1.2em; margin: 0; }
 
 /* forms */
