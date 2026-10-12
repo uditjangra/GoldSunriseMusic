@@ -259,7 +259,7 @@ function route(soft = false) {
 }
 
 /* First-login quiz for her. Shown once; remembered on her account. */
-const WRONG_ARTISTS = ["Arijit Singh", "Taylor Swift", "Ed Sheeran"];
+const ARTIST = "Udit Jangra";
 
 function renderWelcome() {
   const who = listenerName();
@@ -273,13 +273,11 @@ function renderWelcome() {
       <h1>Your favorite artist?</h1>
       <p>Choose wisely.</p>
       <div class="quiz">
-        ${shuffle([...WRONG_ARTISTS.map((a) => ({ a, ok: false })), { a: "Udit Udit Udit Udit", ok: true }])
-          .map((o) => `<button class="quiz-opt" data-act="wel-pick" data-ok="${o.ok}">${esc(o.a)}</button>`).join("")}
-      </div>
-      <p class="quiz-hint" id="quiz-hint" aria-live="polite"></p>`,
+        ${[1, 2, 3, 4].map(() => `<button class="quiz-opt" data-act="wel-pick">${ARTIST}</button>`).join("")}
+      </div>`,
     () => `<div class="login-art">💖</div>
       <h1>Correct answer!</h1>
-      <p>Identity confirmed. Welcome to your songbook, made by ${esc(singer)} just for you ♡</p>
+      <p>${ARTIST}?! Wow, great taste. Identity confirmed. Welcome to your songbook, made by ${esc(singer)} just for you ♡</p>
       <button class="btn primary" data-act="wel-done">Come in ${I.heart}</button>`,
   ];
   $app.innerHTML = `<div class="login"><div class="login-card welcome step-${state.welcome.step}">
@@ -288,17 +286,6 @@ function renderWelcome() {
     ${state.welcome.preview ? `<p class="quiz-hint">preview — she sees this once on her first sign-in</p>` : ""}
   </div></div>`;
   if (state.welcome.step === 2) burstHearts();
-}
-
-function pickArtist(el) {
-  if (el.dataset.ok === "true") { state.welcome.step = 2; return renderWelcome(); }
-  // Every wrong answer turns into the right one.
-  el.textContent = "Udit";
-  el.dataset.ok = "true";
-  el.classList.remove("shake"); void el.offsetWidth; el.classList.add("shake");
-  const msgs = ["Hmm… are you sure? 🤨", "Wrong answer, try again 🙂", "That's not even an option anymore 😌"];
-  const n = document.querySelectorAll('.quiz-opt[data-ok="true"]').length - 2;
-  document.getElementById("quiz-hint").textContent = msgs[Math.min(Math.max(n, 0), msgs.length - 1)];
 }
 
 async function finishWelcome() {
@@ -563,7 +550,7 @@ document.addEventListener("click", async (e) => {
       case "add-songs": pickSongs(relById(id)); break;
       case "edit-track": editTrack(state.tracks.find((t) => t.id === id)); break;
       case "wel-next": state.welcome.step++; renderWelcome(); break;
-      case "wel-pick": pickArtist(el); break;
+      case "wel-pick": state.welcome.step = 2; renderWelcome(); break;
       case "wel-done": await finishWelcome(); break;
       case "req-toggle": await toggleRequest(id); break;
       case "req-edit": editRequest(state.requests.find((r) => r.id === id)); break;

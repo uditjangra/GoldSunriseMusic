@@ -212,8 +212,6 @@ button.req-box:hover { border-color: var(--pink); }
   font-weight: 800; cursor: pointer; box-shadow: 0 3px 0 var(--line); transition: transform .15s, background .15s;
 }
 .quiz-opt:hover { background: var(--pink-soft); border-color: var(--pink); transform: translateY(-1px); }
-.quiz-opt.shake { animation: shake .4s; background: var(--pink-soft); border-color: var(--pink); color: var(--pink-deep); }
-@keyframes shake { 20%, 60% { transform: translateX(-7px) rotate(-2deg); } 40%, 80% { transform: translateX(7px) rotate(2deg); } }
 .quiz-hint { min-height: 1.3em; font-weight: 800; color: var(--pink-deep) !important; margin: 14px 0 0 !important; font-size: .92rem; }
 .dots { display: flex; justify-content: center; gap: 6px; margin-top: 22px; }
 .dots i { width: 8px; height: 8px; border-radius: 50%; background: var(--line); transition: width .2s; }
@@ -221,7 +219,7 @@ button.req-box:hover { border-color: var(--pink); }
 .hearts-burst { position: fixed; inset: 0; pointer-events: none; z-index: 70; overflow: hidden; }
 .hearts-burst i { position: absolute; bottom: -40px; font-style: normal; animation: float-up 2.6s ease-in forwards; }
 @keyframes float-up { to { transform: translateY(-110vh) rotate(25deg); opacity: 0; } }
-@media (prefers-reduced-motion: reduce) { .hearts-burst { display: none; } .quiz-opt.shake { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .hearts-burst { display: none; } }
 
 .err { color: #c2416e; font-weight: 700; font-size: .9rem; min-height: 1.2em; margin: 0; }
 
