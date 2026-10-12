@@ -171,6 +171,24 @@ svg { width: 1em; height: 1em; display: block; }
 @keyframes pop { 40% { transform: scale(1.35); } }
 .heart-flag { padding: 0 6px; display: flex; align-items: center; gap: 4px; font-size: .78rem; font-weight: 800; white-space: nowrap; }
 .heart-flag svg { width: 15px; height: 15px; }
+/* song requests */
+.req-add { display: flex; gap: 10px; margin-bottom: 14px; }
+.req-add input { flex: 1; min-width: 0; }
+.req-add .btn { flex: none; }
+.req { gap: 12px; padding: 8px 6px 8px 12px; }
+.req .t-text { flex: 1; }
+.req-box {
+  width: 28px; height: 28px; flex: none; display: grid; place-items: center; padding: 0;
+  border: 2.5px solid #e8c3d3; border-radius: 9px; background: #fff; color: transparent;
+}
+button.req-box { cursor: pointer; }
+button.req-box:hover { border-color: var(--pink); }
+.req-box svg { width: 18px; height: 18px; }
+.req-box.on { background: var(--pink); border-color: var(--pink); color: #fff; }
+.req.is-done .t-title { text-decoration: line-through; color: var(--ink-soft); }
+.check-field { display: flex; align-items: center; gap: 8px; font-weight: 800; margin-bottom: 14px; cursor: pointer; }
+.check-field input { width: 18px; height: 18px; accent-color: var(--pink); }
+
 .lyrics {
   list-style: none; margin: 2px 8px 10px 48px; padding: 16px 18px; background: #fffaf4; border-radius: 16px;
   white-space: pre-line; line-height: 1.65; border: 2px dashed #f5c6d6;

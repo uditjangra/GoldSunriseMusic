@@ -53,6 +53,10 @@ Any static host works: Vercel, Netlify, GitHub Pages. Easiest by hand: **app.net
 
 **As the listener (her)**: play, shuffle, repeat, read lyrics, and tap ♡ on songs she loves. You'll see her favorites on your home page.
 
+**Song requests** (bottom of the home page): she can add songs she wants to hear, tick them off like a to-do list, and tap ✎ to rename, add a note, or remove one. You see the same list live, but read-only.
+
+> Already set up before song requests existed? Run `supabase-setup.sql` again in the SQL Editor (keep your two emails in it). It's safe to re-run and adds the new `requests` table.
+
 ## Good to know
 
 - **Free plan limits:** 1 GB of files in total, max 50 MB per song. An MP3 is usually 3–10 MB, so that's roughly 100–300 songs.

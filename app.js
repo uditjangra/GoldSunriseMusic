@@ -33,6 +33,7 @@ const I = {
   plus: svg('<path d="M12 5v14M5 12h14"/>', 1),
   back: svg('<path d="M19 12H5M12 19l-7-7 7-7"/>', 1),
   note: svg('<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>', 1),
+  check: svg('<path d="m5 12.5 4.5 4.5L19 7.5"/>', 1),
 };
 
 const state = {
@@ -43,6 +44,8 @@ const state = {
   releases: [],
   tracks: [],
   hearts: new Set(),
+  requests: [],
+  reqDraft: "",
   urls: new Map(),        // storage path -> { url, exp }
   queue: [],
   qi: -1,
@@ -149,17 +152,19 @@ function teardown() {
 }
 
 async function loadAll() {
-  const [p, r, t, h] = await Promise.all([
+  const [p, r, t, h, q] = await Promise.all([
     sb.from("profile").select("*").eq("id", 1).maybeSingle(),
     sb.from("releases").select("*").order("released_on", { ascending: false, nullsFirst: false }).order("created_at", { ascending: false }),
     sb.from("tracks").select("*").order("position").order("created_at"),
     sb.from("hearts").select("track_id"),
+    sb.from("requests").select("*").order("created_at"),
   ]);
-  for (const x of [p, r, t, h]) if (x.error) throw x.error;
+  for (const x of [p, r, t, h, q]) if (x.error) throw x.error;
   state.profile = p.data || { name: "My Music" };
   state.releases = r.data;
   state.tracks = t.data;
   state.hearts = new Set(h.data.map((x) => x.track_id));
+  state.requests = q.data;
   await signPaths([state.profile.avatar_path, ...state.releases.map((x) => x.cover_path), ...state.tracks.map((x) => x.audio_path)]);
   syncQueue();
 }
@@ -181,7 +186,7 @@ async function signPaths(paths) {
 function subscribe() {
   if (state.channel) return;
   const ch = sb.channel("songbook");
-  for (const table of ["profile", "releases", "tracks", "hearts"]) {
+  for (const table of ["profile", "releases", "tracks", "hearts", "requests"]) {
     ch.on("postgres_changes", { event: "*", schema: "public", table }, scheduleRefresh);
   }
   ch.subscribe();
@@ -281,7 +286,99 @@ function renderHome() {
           <button class="btn small" data-act="play-ctx" data-ctx="favs">${I.play} Play</button></div>
         <ol class="tracklist">${favs.map((t, i) => trackRow(t, i, { ctx: "favs", thumb: true })).join("")}</ol>
       </section>` : ""}
+    ${requestsShelf()}
     ${footer()}`;
+  bindRequestForm();
+}
+
+/* Song requests: she writes and ticks them off; the singer can only read. */
+function requestsShelf() {
+  const S = state.isSinger;
+  const who = listenerName();
+  const list = [...state.requests].sort((a, b) => a.done - b.done);
+  const open = state.requests.filter((r) => !r.done).length;
+  return `<section class="shelf">
+    <div class="shelf-head"><h2>${S ? (who ? `${esc(who)}'s requests` : "Her requests") : "Song requests"}${state.requests.length ? ` <small>${open} to sing</small>` : ""}</h2></div>
+    ${S ? "" : `<form class="req-add" id="req-form">
+      <input type="text" name="title" placeholder="a song you'd love to hear me sing…" maxlength="120" autocomplete="off">
+      <button class="btn primary">${I.plus} Add</button>
+    </form>`}
+    ${list.length
+      ? `<ul class="tracklist reqlist">${list.map(requestRow).join("")}</ul>`
+      : `<p class="empty">${S ? "No requests yet ♡" : "Nothing here yet — add a song you'd like to hear!"}</p>`}
+  </section>`;
+}
+
+function requestRow(r) {
+  const S = state.isSinger;
+  const box = S
+    ? `<span class="req-box ${r.done ? "on" : ""}" role="img" aria-label="${r.done ? "Done" : "Not done yet"}">${I.check}</span>`
+    : `<button class="req-box ${r.done ? "on" : ""}" data-act="req-toggle" data-id="${r.id}" role="checkbox" aria-checked="${r.done}" aria-label="Mark “${esc(r.title)}” ${r.done ? "not done" : "done"}">${I.check}</button>`;
+  return `<li class="track req ${r.done ? "is-done" : ""}">
+    ${box}
+    <span class="t-text">
+      <span class="t-title">${esc(r.title)}</span>
+      ${r.note ? `<span class="t-note">${esc(r.note)}</span>` : ""}
+    </span>
+    ${S ? "" : `<button class="icon-btn" data-act="req-edit" data-id="${r.id}" title="Edit request">${I.edit}</button>`}
+  </li>`;
+}
+
+function bindRequestForm() {
+  const form = document.getElementById("req-form");
+  if (!form) return;
+  const input = form.elements.title;
+  input.value = state.reqDraft;
+  input.addEventListener("input", () => (state.reqDraft = input.value));
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const title = input.value.trim();
+    if (!title) return input.focus();
+    const btn = form.querySelector("button");
+    btn.disabled = true;
+    const { error } = await sb.from("requests").insert({ title });
+    btn.disabled = false;
+    if (error) return toast("Oops: " + error.message, 5000);
+    state.reqDraft = "";
+    await refresh();
+    document.querySelector("#req-form input")?.focus();
+    toast("Request added ♡");
+  });
+}
+
+async function toggleRequest(id) {
+  const r = state.requests.find((x) => x.id === id);
+  if (!r) return;
+  r.done = !r.done;
+  route(true);
+  const { error } = await sb.from("requests").update({ done: r.done }).eq("id", id);
+  if (error) { r.done = !r.done; route(true); throw error; }
+}
+
+function editRequest(r) {
+  if (!r) return;
+  modal({
+    title: "Edit request",
+    danger: "Remove",
+    body: `
+      ${field("Song", `<input type="text" name="title" value="${esc(r.title)}" required maxlength="120">`)}
+      ${field("Note", `<input type="text" name="note" value="${esc(r.note)}" maxlength="200" placeholder="optional — e.g. the acoustic version">`)}
+      <label class="check-field"><input type="checkbox" name="done" ${r.done ? "checked" : ""}> Done</label>`,
+    onSubmit: async (fd) => {
+      const title = fd.get("title").trim();
+      if (!title) throw new Error("Add a song name first.");
+      const { error } = await sb.from("requests").update({ title, note: fd.get("note").trim(), done: fd.get("done") === "on" }).eq("id", r.id);
+      if (error) throw error;
+      await refresh();
+      toast("Saved ♡");
+    },
+    onDanger: async () => {
+      const { error } = await sb.from("requests").delete().eq("id", r.id);
+      if (error) throw error;
+      await refresh();
+      toast("Request removed");
+    },
+  });
 }
 
 function shelf(title, list, kind) {
@@ -397,6 +494,8 @@ document.addEventListener("click", async (e) => {
       case "edit-release": editRelease(relById(id)); break;
       case "add-songs": pickSongs(relById(id)); break;
       case "edit-track": editTrack(state.tracks.find((t) => t.id === id)); break;
+      case "req-toggle": await toggleRequest(id); break;
+      case "req-edit": editRequest(state.requests.find((r) => r.id === id)); break;
       case "move": await moveTrack(id, Number(el.dataset.dir)); break;
       case "signout": await sb.auth.signOut(); location.hash = ""; break;
       case "reload": location.reload(); break;

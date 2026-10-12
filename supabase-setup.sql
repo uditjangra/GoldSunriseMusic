@@ -19,6 +19,11 @@ language sql stable as $$
   select coalesce(lower(auth.jwt() ->> 'email') = lower(public.singer_email()), false)
 $$;
 
+create or replace function public.is_listener() returns boolean
+language sql stable as $$
+  select coalesce(lower(auth.jwt() ->> 'email') = lower(public.listener_email()), false)
+$$;
+
 create or replace function public.is_member() returns boolean
 language sql stable as $$
   select coalesce(lower(auth.jwt() ->> 'email') in (lower(public.singer_email()), lower(public.listener_email())), false)
@@ -65,12 +70,21 @@ create table if not exists public.hearts (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.requests (
+  id         uuid primary key default gen_random_uuid(),
+  title      text not null,
+  note       text not null default '',
+  done       boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
 -- Privacy rules: only your two emails can see anything;
 -- only you can change songs; both can favorite.
 alter table public.profile  enable row level security;
 alter table public.releases enable row level security;
 alter table public.tracks   enable row level security;
 alter table public.hearts   enable row level security;
+alter table public.requests enable row level security;
 
 do $$
 declare t text;
@@ -87,11 +101,18 @@ drop policy if exists "members hearts" on public.hearts;
 create policy "members hearts" on public.hearts for all to authenticated
   using (public.is_member()) with check (public.is_member());
 
+-- Song requests: both can see them; only she can add, edit, tick or remove.
+drop policy if exists "members read" on public.requests;
+drop policy if exists "listener writes" on public.requests;
+create policy "members read" on public.requests for select to authenticated using (public.is_member());
+create policy "listener writes" on public.requests for all to authenticated
+  using (public.is_listener()) with check (public.is_listener());
+
 -- Live updates (so changes show up for her instantly)
 do $$
 declare t text;
 begin
-  foreach t in array array['profile', 'releases', 'tracks', 'hearts'] loop
+  foreach t in array array['profile', 'releases', 'tracks', 'hearts', 'requests'] loop
     begin
       execute format('alter publication supabase_realtime add table public.%I', t);
     exception when duplicate_object then null;
